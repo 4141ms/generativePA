@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.9 (pytorch_env)" project-jdk-type="Python SDK" />
+  <component name="Black">
+    <option name="sdkName" value="Remote Python 3.9.13 (sftp://wjy@192.168.112.58:22/home/wjy/.virtualenvs/generativePA/bin/python)" />
+  </component>
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.8" project-jdk-type="Python SDK" />
 </project>

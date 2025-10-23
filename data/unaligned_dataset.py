@@ -104,4 +104,4 @@ if __name__ == '__main__':
         num_workers=2,
         drop_last=True
     )
-    print(dataloader.batch_size)
+    print(dataloader)

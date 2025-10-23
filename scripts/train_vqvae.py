@@ -99,7 +99,7 @@ def main_oral_vqvae(args):
     #             torch.save(model.state_dict(), f)
     #     with open('{0}/model_{1}.pt'.format(save_filename, epoch + 1), 'wb') as f:
     #         torch.save(model.state_dict(), f)
-    return 0
+    # return 0
 
 
 def main(args):

@@ -12,19 +12,12 @@ from argparse import ArgumentParser
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-# from pathlib import Path
-# project_root = Path(__file__).resolve().parent.parent
-#
-# import sys
-# # Add it to Python path if not already present
-# if str(project_root) not in sys.path:
-#     sys.path.append(str(project_root))
 
 
 class UnalignedDataset(Dataset):
     """
+    author: UNSB
     This dataset class can load unaligned/unpaired datasets.
-
     It requires two directories to host training images from domain A '/path/to/data/trainA'
     and from domain B '/path/to/data/trainB' respectively.
     You can train the model with the dataset flag '--dataroot /path/to/data'.

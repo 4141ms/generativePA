@@ -1,0 +1,145 @@
+train:
+  epochs: 20
+  batch_size: 2
+  lr: 1.e-4
+  lr_scheduler_stages: 6
+  save_freq: 1
+  start: 0
+  cuda_num:
+    - 0 # -1 -2 -3
+
+base:
+  phase: 'train' # train, test, eval
+  log_root: './log/'
+
+data:
+  use_slice: 5
+  data_root: './datasets/MRI2PA/'
+  niigz_root: 'E:\sd_data\human\3d_brain\zhangf\' #  hdf5_root: '/home/yutianen/data/sub/sub_hdf5/' #  dcm_root: '/home/groups/shared/TOF_200case/'
+  use_modality:
+    - 'T1' #    - 'T1'
+    - 'T2' #    - '3D-T2W' #    - '3D-FLAIR'
+    - 'MRA'
+
+mip_loss:
+  temp: 0.75
+
+BB:
+  mt_type: 'linear' # options {'linear', 'sin'}
+  objective: 'ysubx' # options {'grad', 'noise', 'ysubx'}
+  timesteps: 1000
+
+  skip_sample: True
+  sample_type: 'linear' # options {"linear", "sin"}
+  sample_step: 50
+
+UNSB:
+  batch_size: 1
+  beta1: 0.5
+  beta2: 0.999
+  checkpoints_dir: ./checkpoints
+  continue_train: False
+  crop_size: 256
+  display_env: main
+  display_freq: 400
+  display_id: None
+  display_ncols: 4
+  display_port: 8097
+  display_server: http://localhost
+  display_winsize: 256
+  easy_label: experiment_name
+  embedding_dim: 512
+  embedding_type: positional
+  epoch: latest
+  epoch_count: 1
+  evaluation_freq: 5000
+  flip_equivariance: False
+  gan_mode: lsgan
+  gpu_ids:
+    - 0
+  init_gain: 0.02
+  init_type: xavier
+  input_nc: 64
+  isTrain: True
+  lambda_GAN: 1.0
+  lambda_NCE: 1.0
+  lambda_SB: 1.0
+  lmda: 0.1
+  load_size: 286
+  lr: 0.0002
+  lr_decay_iters: 50
+  lr_policy: linear
+  max_dataset_size: inf
+  mode: sb
+  model: sb
+  n_epochs: 20
+  n_epochs_decay: 20
+  n_layers_D: 3
+  n_mlp: 3
+  name: m2p_SB
+  nce_T: 0.07
+  nce_idt: True
+  nce_includes_all_negatives_from_minibatch: False
+  nce_layers: 0,4,8,12,16
+  ndf: 64
+  netD: basic_cond
+  netE: basic_cond
+  netF: mlp_sample
+  netF_nc: 256
+  netG: resnet_9blocks_cond
+  ngf: 64
+  no_antialias: False
+  no_antialias_up: False
+  no_dropout: True
+  no_flip: False
+  no_html: False
+  normD: instance
+  normG: instance
+  num_patches: 256
+  num_threads: 4
+  num_timesteps: 5
+  output_nc: 64
+  phase: train
+  pool_size: 0
+  preprocess: resize_and_crop
+  pretrained_name: None
+  print_freq: 100
+  random_scale_max: 3.0
+  save_by_iter: False
+  save_epoch_freq: 4
+  save_latest_freq: 5000
+  serial_batches: False
+  std: 0.25
+  style_dim: 512
+  stylegan2_G_num_downsampling: 1
+  suffix:
+  tau: 0.01
+  update_html_freq: 1000
+  verbose: False
+
+
+
+FusionUnet:
+  in_channels: 5
+  out_channels: 5
+  num_res_blocks: 2
+  model_channels: 32 
+  channel_mult: [1, 4, 8]
+  conv_resample: False
+  condition_key: "nocond"  # options {"SpatialRescaler", "first_stage", "nocond"}
+
+Restormer:
+  in_c: 10
+  out_c: 5
+  model_c: 8
+  mult: [1, 2, 4, 8]
+  emb_c: 128
+
+SmallUnet:
+  in_channels: 10
+  out_channels: 5
+  num_res_blocks: 1
+  model_channels: 16 
+  channel_mult: [1, 4, 8]
+  conv_resample: True
+  condition_key: "SpatialRescaler"  # options {"SpatialRescaler", "first_stage", "nocond"}

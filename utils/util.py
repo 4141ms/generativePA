@@ -8,7 +8,12 @@ import importlib
 import argparse
 from argparse import Namespace
 import torchvision
-
+import os
+import numpy as np
+import nibabel as nib
+import matplotlib.pyplot as plt
+from glob import glob
+from types import SimpleNamespace
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -164,3 +169,148 @@ def correct_resize(t, size, mode=Image.BICUBIC):
         resized_t = torchvision.transforms.functional.to_tensor(one_image) * 2 - 1.0
         resized.append(resized_t)
     return torch.stack(resized, dim=0).to(device)
+
+def view_nii_mlp():
+    import numpy as np
+    import nibabel as nib
+
+    # 加载nii.gz文件
+    img = nib.load('../datasets/human/MRI/IXI002-Guys-0828-MRA.nii.gz')
+    data = img.get_fdata()
+
+    # 沿不同方向进行最大值投影
+    mip_axial = np.max(data, axis=2)  # 轴位投影
+    mip_coronal = np.max(data, axis=1)  # 冠状位投影
+    mip_sagittal = np.max(data, axis=0)  # 矢状位投影
+
+    # 保存结果
+    nib.save(nib.Nifti1Image(mip_axial, img.affine), '../results/mip_axial.nii.gz')
+    nib.save(nib.Nifti1Image(mip_coronal, img.affine), '../results/mip_coronal.nii.gz')
+    nib.save(nib.Nifti1Image(mip_sagittal, img.affine), '../results/mip_sagittal.nii.gz')
+
+def view_nii():
+    import numpy as np
+    import nibabel as nib
+    import matplotlib.pyplot as plt
+    import os
+
+    # 加载nii.gz文件 读取不了0970这个文件
+    img = nib.load('../IXI371-IOP-0970-MRA.nii.gz')
+    data = img.get_fdata()
+
+    print(data.shape)
+    # mip_axial = np.max(data, axis=2)  # Z轴投影
+    # save_mip_as_jpg(mip_axial, os.path.join("../datasets/human/MRI/MRA", "IXI371-IOP-0970-MRA_axial.jpg"))
+
+    # # 方法1：自动归一化到0-255（适用于大多数MRA数据）
+    # data_normalized = (data - np.min(data)) / (np.max(data) - np.min(data)) * 255
+    # data_normalized = data_normalized.astype(np.uint8)  # 转换为8位无符号整数
+    #
+    # # 方法2：手动设置窗宽窗位（如MRA常用窗宽500，窗位300）
+    # # window_width = 500
+    # # window_center = 300
+    # # vmin = window_center - window_width // 2
+    # # vmax = window_center + window_width // 2
+    # # data_normalized = np.clip((data - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
+    #
+    # plt.imsave('../results/mip_output.jpg', data_normalized, cmap='gray', format='jpg')
+    #
+    # print(data_normalized.shape)
+    # print(data_normalized.ndim)
+
+
+
+def process_nii_to_mip_jpg(input_dir, output_dir):
+    """
+    处理目录中的所有.nii.gz文件，生成MIP并保存为JPG
+
+    参数:
+        input_dir: 输入目录路径（包含.nii.gz文件）
+        output_dir: 输出目录路径（将保存JPG文件）
+    """
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 获取所有.nii.gz文件
+    nii_files = glob(os.path.join(input_dir, '*.nii.gz'))
+
+    for file_path in nii_files:
+        try:
+            # 加载NIfTI文件
+            img = nib.load(file_path)
+            data = img.get_fdata()
+
+            # 获取基础文件名（不含路径和扩展名）
+            base_name = os.path.basename(file_path).replace('.nii.gz', '')
+
+            print(f"Processing: {base_name}")
+
+            # 对3D数据做MIP（如果是4D数据需要额外处理）
+            if data.ndim == 3:
+                # 三个方向的MIP
+                mip_axial = np.mean(data, axis=2)  # Z轴投影
+                # mip_coronal = np.max(data, axis=1)  # Y轴投影
+                # mip_sagittal = np.max(data, axis=0)  # X轴投影
+
+                # 保存三个视角的JPG
+                save_mip_as_jpg(mip_axial, os.path.join(output_dir, f"{base_name}_axial.jpg"))
+                # save_mip_as_jpg(mip_coronal, os.path.join(output_dir, f"{base_name}_coronal.jpg"))
+                # save_mip_as_jpg(mip_sagittal, os.path.join(output_dir, f"{base_name}_sagittal.jpg"))
+
+            elif data.ndim == 4:
+                # 处理4D数据（如动态增强MRA）
+                print(f"4D data detected - processing time series...")
+                for t in range(data.shape[3]):
+                    # 对每个时间点做MIP
+                    mip = np.max(data[..., t], axis=2)
+                    save_mip_as_jpg(mip, os.path.join(output_dir, f"{base_name}_T{t:03d}.jpg"))
+
+        except Exception as e:
+            print(f"Error processing {file_path}: {str(e)}")
+
+
+def save_mip_as_jpg(mip_data, output_path, window_width=500, window_center=300):
+    """
+    将MIP数据保存为JPG图像
+
+    参数:
+        mip_data: 2D numpy数组
+        output_path: 输出路径
+        window_width: 窗宽（对比度调整）
+        window_center: 窗位（亮度调整）
+    """
+    # 窗宽窗位调整（医学影像常用）
+    vmin = window_center - window_width // 2
+    vmax = window_center + window_width // 2
+
+    # 标准化到0-255范围并裁剪
+    mip_normalized = np.clip((mip_data - vmin) / (vmax - vmin) * 255, 0, 255).astype(np.uint8)
+
+    # 保存为JPG
+    plt.imsave(output_path, mip_normalized, cmap='gray', format='jpg')
+    plt.close()
+
+
+def dict_as_namespace(d) -> SimpleNamespace:
+    """
+    Convert a dictionaty to a namespace (i.e., support for the `.` notation)
+    """
+    x = SimpleNamespace()
+    for k, v in d.items():
+        if isinstance(v, dict):
+            setattr(x, k, dict_as_namespace(v))
+        else:
+            setattr(x, k, v)
+    return x
+
+# 使用示例
+if __name__ == "__main__":
+    input_directory = r"E:\sd_data\human\3d_brain\zhangf\IXI_MRA" # 替换为你的输入目录
+    output_directory = "../datasets/human/MRI/MRA_mean"  # 替换为输出目录
+
+    # Error processing E:\sd_data\human\3d_brain\zhangf\IXI_MRA\IXI371-IOP-0970-MRA.nii.gz:
+
+    process_nii_to_mip_jpg(input_directory, output_directory)
+    print("MIP processing complete!")
+
+    # view_nii()

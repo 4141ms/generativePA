@@ -1,0 +1,27 @@
+{
+    "train": [
+        "IXI489-Guys-1014",
+        "IXI291-IOP-0882",
+        "IXI330-Guys-0881",
+        "IXI424-IOP-0991",
+        "IXI185-Guys-0795",
+        "IXI064-Guys-0743",
+        "IXI558-Guys-1079",
+        "IXI051-HH-1328",
+        "IXI251-Guys-1055",
+        "IXI318-Guys-0895",
+        "IXI511-HH-2238"
+    ],
+    "test": [
+        "IXI337-IOP-0929",
+        "IXI161-HH-2533",
+        "IXI567-HH-2536",
+        "IXI050-Guys-0711",
+        "IXI258-HH-1769",
+        "IXI411-Guys-0959"
+    ],
+    "valid": [
+        "IXI226-HH-1618",
+        "IXI189-Guys-0799"
+    ]
+}

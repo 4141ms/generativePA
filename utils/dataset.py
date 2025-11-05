@@ -22,57 +22,6 @@ import pandas as pd
 from typing import Tuple, Union
 
 
-#
-# class ImgDataset(Dataset):
-#     def __init__(self, root):
-#         self.root = Path(root)
-#         self.files = list(self.root.glob('*.png')) + list(self.root.glob('*.jpg'))
-#         self.transform = transforms.Compose([
-#             transforms.Resize((cfg.img_size, cfg.img_size)),
-#             transforms.Grayscale(),
-#             transforms.ToTensor(),
-#             transforms.Normalize([0.5], [0.5])
-#         ])
-#
-#     def __len__(self):
-#         return len(self.files)
-#
-#     def __getitem__(self, idx):
-#         p = self.files[idx]
-#         img = Image.open(p).convert('L')
-#         img = self.transform(img)
-#         return img
-#
-#
-# class PairedSimDataset(Dataset):
-#     def __init__(self, sim_root):
-#         # expects sim_root/mri/*.png and sim_root/pa_stats/ as torch saved dicts or numpy
-#         self.mri_root = Path(sim_root) / 'mri'
-#         self.pa_stats_root = Path(sim_root) / 'pa_stats'
-#         self.mri_files = sorted(list(self.mri_root.glob('*.png')))
-#
-#     def __len__(self):
-#         return len(self.mri_files)
-#
-#     def __getitem__(self, idx):
-#         mri_p = self.mri_files[idx]
-#         img = Image.open(mri_p).convert('L')
-#         transform = transforms.Compose([
-#             transforms.Resize((cfg.img_size, cfg.img_size)),
-#             transforms.Grayscale(),
-#             transforms.ToTensor(),
-#             transforms.Normalize([0.5], [0.5])
-#         ])
-#         mri = transform(img)
-#         stat_file = self.pa_stats_root / (mri_p.stem + '.pt')
-#         if stat_file.exists():
-#             stats = torch.load(str(stat_file))
-#         else:
-#             # default: mean intensity only
-#             stats = {'mean': torch.tensor([0.0])}
-#         return mri, stats
-#
-
 def get_datalist(
         ids_path: str,
 ):

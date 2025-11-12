@@ -14,12 +14,15 @@ base:
 
 data:
   use_slice: 5
-  data_root: './datasets/MRI2PA/'
-  niigz_root: 'E:\sd_data\human\3d_brain\zhangf\' #  hdf5_root: '/home/yutianen/data/sub/sub_hdf5/' #  dcm_root: '/home/groups/shared/TOF_200case/'
+  mat_root: 'E:\sd_data\results\gt\p0_sos_den\p0\'
+  mri_root: 'E:\sd_data\human\3d_brain\zhangf\' #  hdf5_root: '/home/yutianen/data/sub/sub_hdf5/' #  dcm_root: '/home/groups/shared/TOF_200case/'
   use_modality:
     - 'T1' #    - 'T1'
     - 'T2' #    - '3D-T2W' #    - '3D-FLAIR'
     - 'MRA'
+    - 'p0' # 初始压力分布
+    - 'sos' # 声速
+    - 'den' # 密度
 
 mip_loss:
   temp: 0.75

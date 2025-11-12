@@ -216,10 +216,10 @@ class PixelDiscriminator(nn.Module):
 
         self.net = [
             nn.Conv2d(input_nc, ndf, kernel_size=1, stride=1, padding=0),
-            nn.LeakyReLU(0.2, True),
+            nn.LeakyReLU(0.2, False),
             nn.Conv2d(ndf, ndf * 2, kernel_size=1, stride=1, padding=0, bias=use_bias),
             norm_layer(ndf * 2),
-            nn.LeakyReLU(0.2, True),
+            nn.LeakyReLU(0.2, False),
             nn.Conv2d(ndf * 2, 1, kernel_size=1, stride=1, padding=0, bias=use_bias)]
 
         self.net = nn.Sequential(*self.net)
@@ -404,6 +404,8 @@ class ResnetGenerator_ncsn(nn.Module):
             for layer in self.model_res:
                 out = layer(out,time_embed,z_embed)
             out = self.model_upsample(out)
+            if torch.isnan(out).any() or torch.isinf(out).any():
+                print("NaN/Inf in netG upsample")
             return out
 ##################################################################################
 # Basic Blocks

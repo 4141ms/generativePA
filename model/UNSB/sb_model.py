@@ -4,8 +4,10 @@ import warnings
 # 忽略 pkg_resources 的弃用警告
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
 
+
 import numpy as np
 import torch
+torch.autograd.set_detect_anomaly(True)
 from .base_model import BaseModel
 import torch.nn as nn
 from . import networks
@@ -109,32 +111,55 @@ class SBModel(BaseModel, nn.Module):
             self.optimizers.append(self.optimizer_E)
 
     def data_dependent_initialize(self, data, data2, condition):
-
+        """
+        The feature network netF is defined in terms of the shape of the intermediate, extracted
+        features of the encoder portion of netG. Because of this, the weights of netF are
+        initialized at the first feedforward pass with some input images.
+        Please also see PatchSampleF.create_mlp(), which is called at the first forward() call.
+        """
         bs_per_gpu = data.size(0) // max(len(self.opt.gpu_ids), 1)
-        self.set_input(data, data2)
+        self.set_input(data, data2, condition)
         self.real_A = self.real_A[:bs_per_gpu]
         self.real_B = self.real_B[:bs_per_gpu]
+        self.forward()  # compute fake images: G(A)
+        if self.opt.isTrain:
 
-        # --- 初始化 time_idx ---
-        bs = self.real_A.size(0)
-        T = getattr(self.opt, 'num_timesteps', 10)
-        self.time_idx = torch.zeros(bs, dtype=torch.long, device=self.device)  # 临时时间步
-        z = torch.randn(bs, 4 * self.opt.ngf, device=self.device)
-
-        # --- 前向计算 encoder 特征 ---
-        with torch.no_grad():
-            feat_q = self.netG(self.real_A, self.time_idx, z, self.nce_layers, condition,  encode_only=True)
-            _ = self.netF(feat_q, self.opt.num_patches, None)
-            self.netF.mlp_initialized = True
-
-        # --- 创建 optimizer_F ---
-        if self.opt.netF == 'mlp_sample' and not hasattr(self, 'optimizer_F'):
-            self.optimizer_F = torch.optim.Adam(self.netF.parameters(),
-                                                lr=self.opt.lr,
-                                                betas=(self.opt.beta1, self.opt.beta2))
-            self.optimizers.append(self.optimizer_F)
-
+            self.compute_G_loss().backward()
+            self.compute_D_loss().backward()
+            self.compute_E_loss().backward()
+            if self.opt.lambda_NCE > 0.0:
+                self.optimizer_F = torch.optim.Adam(self.netF.parameters(), lr=self.opt.lr,
+                                                    betas=(self.opt.beta1, self.opt.beta2))
+                self.optimizers.append(self.optimizer_F)
         print("SBModel data-dependent initialization 完成")
+
+    # def data_dependent_initialize(self, data, data2, condition):
+    #
+    #     bs_per_gpu = data.size(0) // max(len(self.opt.gpu_ids), 1)
+    #     self.set_input(data, data2)
+    #     self.real_A = self.real_A[:bs_per_gpu]
+    #     self.real_B = self.real_B[:bs_per_gpu]
+    #
+    #     # --- 初始化 time_idx ---
+    #     bs = self.real_A.size(0)
+    #     T = getattr(self.opt, 'num_timesteps', 10)
+    #     self.time_idx = torch.zeros(bs, dtype=torch.long, device=self.device)  # 临时时间步
+    #     z = torch.randn(bs, 4 * self.opt.ngf, device=self.device)
+    #
+    #     # --- 前向计算 encoder 特征 ---
+    #     with torch.no_grad():
+    #         feat_q = self.netG(self.real_A, self.time_idx, z, self.nce_layers, condition,  encode_only=True)
+    #         _ = self.netF(feat_q, self.opt.num_patches, None)
+    #         self.netF.mlp_initialized = True
+    #
+    #     # --- 创建 optimizer_F ---
+    #     if self.opt.netF == 'mlp_sample' and not hasattr(self, 'optimizer_F'):
+    #         self.optimizer_F = torch.optim.Adam(self.netF.parameters(),
+    #                                             lr=self.opt.lr,
+    #                                             betas=(self.opt.beta1, self.opt.beta2))
+    #         self.optimizers.append(self.optimizer_F)
+    #
+    #     print("SBModel data-dependent initialization 完成")
 
     # def optimize_parameters(self):
     #     # forward
@@ -168,34 +193,37 @@ class SBModel(BaseModel, nn.Module):
     #     self.optimizer_G.step()
     #     if self.opt.netF == 'mlp_sample':
     #         self.optimizer_F.step()
+    #
+    #     losses = {'loss_D': self.loss_D, 'loss_E': self.loss_E, 'loss_G': self.loss_G}
+    #     return losses
 
-    def optimize_parameters(self, compute_D=True, compute_E=True, compute_G=True):
-        """
-        仅计算并返回各部分损失（不 backward / step）。
-        返回 dict: {'loss_D': tensor, 'loss_E': tensor, 'loss_G': tensor}
-        这些 loss 保留计算图，外部会调用 manual_backward 并 step 相应 optimizer。
-        """
-        # 保证为 train 模式（以便 batchnorm/dropout 正确）
+    def optimize_parameters(self, backward=False):
+        # 前向
         self.netG.train()
-        if hasattr(self, 'netE'):
-            self.netE.train()
-        if hasattr(self, 'netD'):
-            self.netD.train()
-        if hasattr(self, 'netF'):
-            self.netF.train()
+        self.netE.train()
+        self.netD.train()
+        self.netF.train()
 
-        losses = {}
+        # 判别器损失
+        self.loss_D = self.compute_D_loss()
+        self.loss_E = self.compute_E_loss()
+        self.loss_G = self.compute_G_loss()
 
-        # 注意：compute_D_loss/compute_E_loss/compute_G_loss 内部不能调用 backward/step
-        if compute_D:
-            # compute_D_loss 使用了 self.fake_B.detach() —— 保持不变（D 应以 fake.detach() 为输入）
-            losses['loss_D'] = self.compute_D_loss()
+        losses = {'loss_D': self.loss_D, 'loss_E': self.loss_E, 'loss_G': self.loss_G}
 
-        if compute_E:
-            losses['loss_E'] = self.compute_E_loss()
+        # 如果需要独立训练（旧逻辑）
+        if not backward:
+            self.optimizer_D.zero_grad()
+            self.loss_D.backward(retain_graph=True)
+            self.optimizer_D.step()
 
-        if compute_G:
-            losses['loss_G'] = self.compute_G_loss()
+            self.optimizer_E.zero_grad()
+            self.loss_E.backward(retain_graph=True)
+            self.optimizer_E.step()
+
+            self.optimizer_G.zero_grad()
+            self.loss_G.backward()
+            self.optimizer_G.step()
 
         return losses
 
@@ -212,251 +240,125 @@ class SBModel(BaseModel, nn.Module):
         self.real_A2 = self.real_A + 0.05 * torch.randn_like(self.real_A)
         self.real_B2 = self.real_B + 0.05 * torch.randn_like(self.real_B)
 
-    # def forward(self):
-    #
-    #     tau = self.opt.tau
-    #     T = self.opt.num_timesteps
-    #     incs = np.array([0] + [1 / (i + 1) for i in range(T - 1)])
-    #     times = np.cumsum(incs)
-    #     times = times / times[-1]
-    #     times = 0.5 * times[-1] + 0.5 * times
-    #     times = np.concatenate([np.zeros(1), times])
-    #     times = torch.tensor(times).float().cuda()
-    #     self.times = times
-    #     bs = self.real_A.size(0)
-    #     time_idx = (torch.randint(T, size=[1]).cuda() * torch.ones(size=[1]).cuda()).long()
-    #     self.time_idx = time_idx
-    #     self.timestep = times[time_idx]
-    #
-    #     with torch.no_grad():
-    #         self.netG.eval()
-    #         for t in range(self.time_idx.int().item() + 1):
-    #
-    #             if t > 0:
-    #                 delta = times[t] - times[t - 1]
-    #                 denom = times[-1] - times[t - 1]
-    #                 inter = (delta / denom).reshape(-1, 1, 1, 1)
-    #                 scale = (delta * (1 - delta / denom)).reshape(-1, 1, 1, 1)
-    #             Xt = self.real_A if (t == 0) else (1 - inter) * Xt + inter * Xt_1.detach() + (
-    #                         scale * tau).sqrt() * torch.randn_like(Xt).to(self.real_A.device)
-    #             time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
-    #             time = times[time_idx]
-    #             z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
-    #             Xt_1 = self.netG(Xt, time_idx, z, condition=self.condition)
-    #
-    #             Xt2 = self.real_A2 if (t == 0) else (1 - inter) * Xt2 + inter * Xt_12.detach() + (
-    #                         scale * tau).sqrt() * torch.randn_like(Xt2).to(self.real_A.device)
-    #             time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
-    #             time = times[time_idx]
-    #             z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
-    #             Xt_12 = self.netG(Xt2, time_idx, z, condition=self.condition)
-    #
-    #             if self.opt.nce_idt:
-    #                 XtB = self.real_B if (t == 0) else (1 - inter) * XtB + inter * Xt_1B.detach() + (
-    #                             scale * tau).sqrt() * torch.randn_like(XtB).to(self.real_A.device)
-    #                 time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
-    #                 time = times[time_idx]
-    #                 z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
-    #                 Xt_1B = self.netG(XtB, time_idx, z, condition=self.condition)
-    #         if self.opt.nce_idt:
-    #             self.XtB = XtB.detach()
-    #         self.real_A_noisy = Xt.detach()
-    #         self.real_A_noisy2 = Xt2.detach()
-    #
-    #     z_in = torch.randn(size=[2 * bs, 4 * self.opt.ngf]).to(self.real_A.device)
-    #     z_in2 = torch.randn(size=[bs, 4 * self.opt.ngf]).to(self.real_A.device)
-    #     """Run forward pass"""
-    #     self.real = torch.cat((self.real_A, self.real_B),
-    #                           dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A
-    #
-    #     self.realt = torch.cat((self.real_A_noisy, self.XtB),
-    #                            dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A_noisy
-    #
-    #     if self.opt.flip_equivariance:
-    #         self.flipped_for_equivariance = self.opt.isTrain and (np.random.random() < 0.5)
-    #         if self.flipped_for_equivariance:
-    #             self.real = torch.flip(self.real, [3])
-    #             self.realt = torch.flip(self.realt, [3])
-    #
-    #         # --- 处理条件向量 ---
-    #         # condition.shape = [B, C, H, W]
-    #     if hasattr(self, 'condition') and self.condition is not None:
-    #         if self.realt.shape[0] != self.condition.shape[0]:
-    #             # batch doubled? 需要 repeat condition
-    #             repeats = self.realt.shape[0] // self.condition.shape[0]
-    #             condition_expanded = self.condition.repeat(repeats, 1, 1, 1)
-    #         else:
-    #             condition_expanded = self.condition
-    #     else:
-    #         condition_expanded = None  # 无条件向量时
-    #
-    #         # --- forward 生成器 ---
-    #     self.fake = self.netG(self.realt, self.time_idx, z_in, condition=condition_expanded)
-    #     self.fake_B2 = self.netG(self.real_A_noisy2, self.time_idx, z_in2,
-    #                              condition=self.condition if hasattr(self, 'condition') else None)
-    #     self.fake_B = self.fake[:self.real_A.size(0)]
-    #     if self.opt.nce_idt:
-    #         self.idt_B = self.fake[self.real_A.size(0):]
-    #
-    #     if self.opt.phase == 'test':
-    #         tau = self.opt.tau
-    #         T = self.opt.num_timesteps
-    #         incs = np.array([0] + [1 / (i + 1) for i in range(T - 1)])
-    #         times = np.cumsum(incs)
-    #         times = times / times[-1]
-    #         times = 0.5 * times[-1] + 0.5 * times
-    #         times = np.concatenate([np.zeros(1), times])
-    #         times = torch.tensor(times).float().cuda()
-    #         self.times = times
-    #         bs = self.real.size(0)
-    #         time_idx = (torch.randint(T, size=[1]).cuda() * torch.ones(size=[1]).cuda()).long()
-    #         self.time_idx = time_idx
-    #         self.timestep = times[time_idx]
-    #         visuals = []
-    #         with torch.no_grad():
-    #             self.netG.eval()
-    #             for t in range(self.opt.num_timesteps):
-    #
-    #                 if t > 0:
-    #                     delta = times[t] - times[t - 1]
-    #                     denom = times[-1] - times[t - 1]
-    #                     inter = (delta / denom).reshape(-1, 1, 1, 1)
-    #                     scale = (delta * (1 - delta / denom)).reshape(-1, 1, 1, 1)
-    #                 Xt = self.real_A if (t == 0) else (1 - inter) * Xt + inter * Xt_1.detach() + (
-    #                             scale * tau).sqrt() * torch.randn_like(Xt).to(self.real_A.device)
-    #                 time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
-    #                 time = times[time_idx]
-    #                 z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
-    #                 Xt_1 = self.netG(Xt, time_idx, z, condition=self.condition)
-    #
-    #                 setattr(self, "fake_" + str(t + 1), Xt_1)
-
     def forward(self):
+
         tau = self.opt.tau
         T = self.opt.num_timesteps
-        device = self.real_A.device
-        bs = self.real_A.size(0)
-
-        # --- 构建时间表 ---
         incs = np.array([0] + [1 / (i + 1) for i in range(T - 1)])
         times = np.cumsum(incs)
         times = times / times[-1]
         times = 0.5 * times[-1] + 0.5 * times
         times = np.concatenate([np.zeros(1), times])
-        times = torch.tensor(times, dtype=torch.float32, device=device)
+        times = torch.tensor(times).float().cuda()
         self.times = times
-
-        # 随机选择一个 timestep
-        time_idx = (torch.randint(T, (1,), device=device) * torch.ones(1, device=device)).long()
+        bs = self.real_A.size(0)
+        time_idx = (torch.randint(T, size=[1]).cuda() * torch.ones(size=[1]).cuda()).long()
         self.time_idx = time_idx
         self.timestep = times[time_idx]
 
-        # --- 初始化 noisy 输入 (完全 out-of-place) ---
-        Xt = self.real_A.clone()
-        Xt2 = self.real_A2.clone()
-        XtB = self.real_B.clone() if self.opt.nce_idt else None
+        with torch.no_grad():
+            self.netG.eval()
+            for t in range(self.time_idx.int().item() + 1):
 
-        Xt_seq = []  # 保存每一步结果
-        Xt2_seq = []
-        XtB_seq = []
+                if t > 0:
+                    delta = times[t] - times[t - 1]
+                    denom = times[-1] - times[t - 1]
+                    inter = (delta / denom).reshape(-1, 1, 1, 1)
+                    scale = (delta * (1 - delta / denom)).reshape(-1, 1, 1, 1)
+                Xt = self.real_A if (t == 0) else (1 - inter) * Xt + inter * Xt_1.detach() + (
+                            scale * tau).sqrt() * torch.randn_like(Xt).to(self.real_A.device)
+                time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
+                time = times[time_idx]
+                z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
+                Xt_1 = self.netG(Xt, time_idx, z, condition=self.condition)
 
-        for t in range(time_idx.item() + 1):
-            # --- 计算噪声系数 ---
-            if t > 0:
-                delta = times[t] - times[t - 1]
-                denom = times[-1] - times[t - 1]
-                inter = (delta / denom).view(1, 1, 1, 1)
-                scale = (delta * (1 - delta / denom)).view(1, 1, 1, 1)
+                Xt2 = self.real_A2 if (t == 0) else (1 - inter) * Xt2 + inter * Xt_12.detach() + (
+                            scale * tau).sqrt() * torch.randn_like(Xt2).to(self.real_A.device)
+                time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
+                time = times[time_idx]
+                z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
+                Xt_12 = self.netG(Xt2, time_idx, z, condition=self.condition)
 
-                Xt = (1 - inter) * Xt + inter * Xt_seq[-1].detach() + (scale * tau).sqrt() * torch.randn_like(Xt)
-                Xt2 = (1 - inter) * Xt2 + inter * Xt2_seq[-1].detach() + (scale * tau).sqrt() * torch.randn_like(Xt2)
                 if self.opt.nce_idt:
-                    XtB = (1 - inter) * XtB + inter * XtB_seq[-1].detach() + (scale * tau).sqrt() * torch.randn_like(
-                        XtB)
-
-            # --- 生成随机向量 ---
-            z1 = torch.randn(bs, 4 * self.opt.ngf, device=device)
-            z2 = torch.randn(bs, 4 * self.opt.ngf, device=device)
-            zB = torch.randn(bs, 4 * self.opt.ngf, device=device) if self.opt.nce_idt else None
-
-            # --- 调用 generator (完全 clone，避免 inplace) ---
-            Xt_next = self.netG(
-                Xt.clone(),
-                (t * torch.ones(bs, device=device)).long(),
-                z1.clone(),
-                condition=self.condition.clone() if hasattr(self, 'condition') else None
-            )
-
-            Xt2_next = self.netG(
-                Xt2.clone(),
-                (t * torch.ones(bs, device=device)).long(),
-                z2.clone(),
-                condition=self.condition.clone() if hasattr(self, 'condition') else None
-            )
-
+                    XtB = self.real_B if (t == 0) else (1 - inter) * XtB + inter * Xt_1B.detach() + (
+                                scale * tau).sqrt() * torch.randn_like(XtB).to(self.real_A.device)
+                    time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
+                    time = times[time_idx]
+                    z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
+                    Xt_1B = self.netG(XtB, time_idx, z, condition=self.condition)
             if self.opt.nce_idt:
-                XtB_next = self.netG(
-                    XtB.clone(),
-                    (t * torch.ones(bs, device=device)).long(),
-                    zB.clone(),
-                    condition=self.condition.clone() if hasattr(self, 'condition') else None
-                )
-                XtB_seq.append(XtB_next)
+                self.XtB = XtB.detach()
+            self.real_A_noisy = Xt.detach()
+            self.real_A_noisy2 = Xt2.detach()
 
-            Xt_seq.append(Xt_next)
-            Xt2_seq.append(Xt2_next)
-
-            Xt = Xt_next
-            Xt2 = Xt2_next
-            if self.opt.nce_idt:
-                XtB = XtB_next
-
-        # --- 保存最终 noisy 输出 (detach 用于保存，但不破坏梯度) ---
-        self.real_A_noisy = Xt_seq[-1].detach()
-        self.real_A_noisy2 = Xt2_seq[-1].detach()
-        if self.opt.nce_idt:
-            self.XtB = XtB_seq[-1].detach()
-
-        # --- forward generator 主调用 ---
-        z_in = torch.randn((2 * bs, 4 * self.opt.ngf), device=device)
-        z_in2 = torch.randn((bs, 4 * self.opt.ngf), device=device)
-
+        z_in = torch.randn(size=[2 * bs, 4 * self.opt.ngf]).to(self.real_A.device)
+        z_in2 = torch.randn(size=[bs, 4 * self.opt.ngf]).to(self.real_A.device)
+        """Run forward pass"""
         self.real = torch.cat((self.real_A, self.real_B),
                               dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A
+
         self.realt = torch.cat((self.real_A_noisy, self.XtB),
                                dim=0) if self.opt.nce_idt and self.opt.isTrain else self.real_A_noisy
 
-        # flip equivariance
-        if self.opt.flip_equivariance and self.opt.isTrain and np.random.random() < 0.5:
-            self.real = torch.flip(self.real, [3])
-            self.realt = torch.flip(self.realt, [3])
+        if self.opt.flip_equivariance:
+            self.flipped_for_equivariance = self.opt.isTrain and (np.random.random() < 0.5)
+            if self.flipped_for_equivariance:
+                self.real = torch.flip(self.real, [3])
+                self.realt = torch.flip(self.realt, [3])
 
-        # expand condition
+            # --- 处理条件向量 ---
+            # condition.shape = [B, C, H, W]
         if hasattr(self, 'condition') and self.condition is not None:
-            repeats = self.realt.size(0) // self.condition.size(0)
-            condition_expanded = self.condition.repeat(repeats, 1, 1, 1) if repeats > 1 else self.condition
+            if self.realt.shape[0] != self.condition.shape[0]:
+                # batch doubled? 需要 repeat condition
+                repeats = self.realt.shape[0] // self.condition.shape[0]
+                condition_expanded = self.condition.repeat(repeats, 1, 1, 1)
+            else:
+                condition_expanded = self.condition
         else:
-            condition_expanded = None
+            condition_expanded = None  # 无条件向量时
 
-        # --- safe forward (完全 out-of-place) ---
-        self.fake = self.netG(
-            self.realt.clone(),
-            self.time_idx.clone(),
-            z_in.clone(),
-            condition=condition_expanded.clone() if condition_expanded is not None else None
-        )
-
-        self.fake_B2 = self.netG(
-            self.real_A_noisy2.clone(),
-            self.time_idx.clone(),
-            z_in2.clone(),
-            condition=self.condition.clone() if hasattr(self, 'condition') else None
-        )
-
-        # split fake
-        self.fake_B = self.fake[:bs].clone()
+        print("self.realt",self.realt.shape, z_in.shape)
+        # --- forward 生成器 ---
+        self.fake = self.netG(self.realt, self.time_idx, z_in, condition=condition_expanded)
+        self.fake_B2 = self.netG(self.real_A_noisy2, self.time_idx, z_in2,
+                                 condition=self.condition if hasattr(self, 'condition') else None)
+        self.fake_B = self.fake[:self.real_A.size(0)]
         if self.opt.nce_idt:
-            self.idt_B = self.fake[bs:].clone()
+            self.idt_B = self.fake[self.real_A.size(0):]
+
+        if self.opt.phase == 'test':
+            tau = self.opt.tau
+            T = self.opt.num_timesteps
+            incs = np.array([0] + [1 / (i + 1) for i in range(T - 1)])
+            times = np.cumsum(incs)
+            times = times / times[-1]
+            times = 0.5 * times[-1] + 0.5 * times
+            times = np.concatenate([np.zeros(1), times])
+            times = torch.tensor(times).float().cuda()
+            self.times = times
+            bs = self.real.size(0)
+            time_idx = (torch.randint(T, size=[1]).cuda() * torch.ones(size=[1]).cuda()).long()
+            self.time_idx = time_idx
+            self.timestep = times[time_idx]
+            visuals = []
+            with torch.no_grad():
+                self.netG.eval()
+                for t in range(self.opt.num_timesteps):
+
+                    if t > 0:
+                        delta = times[t] - times[t - 1]
+                        denom = times[-1] - times[t - 1]
+                        inter = (delta / denom).reshape(-1, 1, 1, 1)
+                        scale = (delta * (1 - delta / denom)).reshape(-1, 1, 1, 1)
+                    Xt = self.real_A if (t == 0) else (1 - inter) * Xt + inter * Xt_1.detach() + (
+                                scale * tau).sqrt() * torch.randn_like(Xt).to(self.real_A.device)
+                    time_idx = (t * torch.ones(size=[self.real_A.shape[0]]).to(self.real_A.device)).long()
+                    time = times[time_idx]
+                    z = torch.randn(size=[self.real_A.shape[0], 4 * self.opt.ngf]).to(self.real_A.device)
+                    Xt_1 = self.netG(Xt, time_idx, z, condition=self.condition)
+
+                    setattr(self, "fake_" + str(t + 1), Xt_1)
 
     def compute_D_loss(self):
         """Calculate GAN loss for the discriminator"""
@@ -510,7 +412,7 @@ class SBModel(BaseModel, nn.Module):
             ET_XY = self.netE(XtXt_1, self.time_idx, XtXt_1).mean() - torch.logsumexp(
                 self.netE(XtXt_1, self.time_idx, XtXt_2).reshape(-1), dim=0)
             self.loss_SB = -(self.opt.num_timesteps - self.time_idx[0]) / self.opt.num_timesteps * self.opt.tau * ET_XY
-            self.loss_SB += self.opt.tau * torch.mean((self.real_A_noisy - self.fake_B) ** 2)
+            self.loss_SB = self.loss_SB + self.opt.tau * torch.mean((self.real_A_noisy - self.fake_B) ** 2)
         if self.opt.lambda_NCE > 0.0:
             self.loss_NCE = self.calculate_NCE_loss(self.real_A, fake)
         else:

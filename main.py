@@ -16,7 +16,7 @@ import pytorch_lightning as pl
 import yaml
 import torch
 torch.multiprocessing.set_sharing_strategy('file_system')
-torch.autograd.set_detect_anomaly(True)
+
 
 
 with open('./configs/options.yaml', 'r') as f:
@@ -63,6 +63,7 @@ def train_stage0_autoencoder(opt, encoder, decoder, dataloader, device, optim, e
 
 
 def train(options):
+    torch.autograd.set_detect_anomaly(True)
     options = dict_as_namespace(options)
     root = options.data.niigz_root
 
